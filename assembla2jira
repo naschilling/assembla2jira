@@ -4,7 +4,7 @@ error_reporting( E_ALL );
 ini_set('display_errors', 1);
 ini_set('memory_limit', "1G");
 
-$shortOpts = "h::v::i:u:p:a::";
+$shortOpts = "h::v::i:f:u:p:a:";
 
 $options = getopt($shortOpts);
 
@@ -38,6 +38,16 @@ if (!file_exists($options["u"])) {
 	exit(1);
 }
 
+if (!isset($options["f"]) || ($options["f"] === false) || is_array($options["f"])) {
+    print "ERROR: please specify field map file\n";
+    exit(1);
+}
+
+if (!file_exists($options["f"])) {
+    print "ERROR: field map file \"" . $options["u"] . "\" not found\n";
+    exit(1);
+}
+
 if (!isset($options["p"]) || ($options["p"] === false) || is_array($options["p"])) {
 	print "ERROR: please specify project info file\n";
 	exit(1);
@@ -54,6 +64,34 @@ $data = array();
 $fields = array();
 
 $file = explode("\n", file_get_contents($options["i"] . "/dump.js"));
+
+function time_to_iso8601_duration($time) {
+    $units = array(
+        "Y" => 365*24*3600,
+        "D" =>     24*3600,
+        "H" =>        3600,
+        "M" =>          60,
+        "S" =>           1,
+    );
+
+    $str = "P";
+    $istime = false;
+
+    foreach ($units as $unitName => &$unit) {
+        $quot  = intval($time / $unit);
+        $time -= $quot * $unit;
+        $unit  = $quot;
+        if ($unit > 0) {
+            if (!$istime && in_array($unitName, array("H", "M", "S"))) { // There may be a better way to do this
+                $str .= "T";
+                $istime = true;
+            }
+            $str .= strval($unit) . $unitName;
+        }
+    }
+
+    return $str;
+}
 
 foreach ($file as $lineNumber => $line) {
 	if (trim($line) === "") {
@@ -105,7 +143,6 @@ $issuePrototype = (object)array(
 	"reporter" => "",
 	"summary" => "",
 	"description" => "",
-	"externalId" => "",
 	"history" => array(),
 );
 
@@ -114,11 +151,47 @@ $issuePrototype = (object)array(
 // get comments by ticket ID
 $comments = array();
 foreach($data["ticket_comments"] as $comment) {
-	if (!isset($comments[$comment["ticket_id"]])) {
-		$comments[$comment["ticket_id"]] = array();
-	}
-	$comments[$comment["ticket_id"]][] = $comment;
+    if (!isset($comments[$comment["ticket_id"]])) {
+        $comments[$comment["ticket_id"]] = array();
+    }
+    $comments[$comment["ticket_id"]][] = $comment;
 }
+
+
+$fieldMap = json_decode(stripComments(file_get_contents($options["f"])));
+
+
+// get workflow_property_vals by ticket ID
+$workflowPropertyVal = array();
+foreach($fieldMap->customFields as $field) {
+    foreach($data["workflow_property_vals"] as $propertyVal) {
+        $varId = $propertyVal['workflow_property_def_id'];
+        if ($varId == $field->sourceId) {
+            if (!isset($workflowPropertyVal[$varId][$propertyVal["workflow_instance_id"]])) {
+                $workflowPropertyVal[$varId][$propertyVal["workflow_instance_id"]] = array();
+            }
+            $workflowPropertyVal[$varId][$propertyVal["workflow_instance_id"]][] = $propertyVal['value'];
+        }
+    }
+}
+
+
+// get priority list
+$priorityMap = (array)$fieldMap->priority;
+
+
+// get ticket status and resolution list
+$statusMap = array();
+$resolutionMap = array();
+$statusSource = (array)$fieldMap->status;
+foreach($data["ticket_statuses"] as $status) {
+    $statusName = $statusSource[$status["name"]]->status;
+    $resolutionName = $statusSource[$status["name"]]->resolution;
+
+    $statusMap[(int)$status["id"]] = $statusName;
+    $resolutionMap[(int)$status["id"]] = $resolutionName;
+}
+
 
 // get documents by document ID
 $documentsById = array();
@@ -137,7 +210,6 @@ foreach($data["tickets"] as $i => $ticket) {
 	$issues[$i] = clone $issuePrototype;
 
 	if (is_null($ticket["completed_date"])) {
-		unset($issues[$i]->status);
 		unset($issues[$i]->resolution);
 	}
 
@@ -146,15 +218,58 @@ foreach($data["tickets"] as $i => $ticket) {
 	$issues[$i]->reporter = getUser($ticket["reporter_id"]);
 	$issues[$i]->assignee = getUser($ticket["assigned_to_id"]);
 
+    $issues[$i]->status = $statusMap[$ticket["ticket_status_id"]];
+    $issues[$i]->resolution = $resolutionMap[$ticket["ticket_status_id"]];
+    $issues[$i]->priority = $priorityMap[$ticket["priority"]];
 	if ($issues[$i]->assignee === null) {
 		unset($issues[$i]->assignee);
 	}
 
+    $timeOriginalEstimate = 0;
+    $timeSpent = 0;
+    if ($ticket["total_estimate"] > 0) {
+        $timeOriginalEstimate = floor(3600 * $ticket["total_estimate"]);
+        $issues[$i]->originalEstimate = time_to_iso8601_duration($timeOriginalEstimate);
+    }
+    if ($ticket["total_invested_hours"] > 0) {
+        $timeSpent = floor(3600 * $ticket["total_invested_hours"]);
+        $issues[$i]->timeSpent = time_to_iso8601_duration($timeSpent);
+    }
+    if ($timeOriginalEstimate > 0 && $timeSpent > 0) {
+        $timeEstimate = $timeOriginalEstimate - $timeSpent;
+        if ($timeEstimate < 0) {
+            $timeEstimate = 0;
+        }
+        $issues[$i]->estimate = time_to_iso8601_duration($timeEstimate);
+    }
 
 
 	$issues[$i]->summary = $ticket["summary"];
-	$issues[$i]->description = autoLinkIssues($ticket["description"]) . "\n\n(imported by assembla2jira script)";
-	$issues[$i]->externalId = $ticket["number"];
+	$customComment = '(imported by assembla2jira script)';
+	if (isset($fieldMap->customComment)) {
+		$customComment = str_replace('[ticketId]', $ticket["number"], $fieldMap->customComment);
+	}
+	$issues[$i]->description = autoLinkIssues($ticket["description"]) . "\n\n" . $customComment;
+
+
+    // Custom field handling
+    $customFieldValues = array();
+    foreach($fieldMap->customFields as $field) {
+        if (isset($workflowPropertyVal[$field->sourceId][$ticket["id"]])) {
+            $value = $workflowPropertyVal[$field->sourceId][$ticket["id"]][0];
+            if (isset($field->fieldName)) {
+                array_push($customFieldValues, array(
+                    "fieldName" => $field->fieldName,
+                    "fieldType" => $field->fieldType,
+                    "value" => $value
+                ));
+            } else if (isset($field->issueField)) {
+                $issueField = $field->issueField;
+                $issues[$i]->$issueField = $value;
+            }
+        }
+    }
+    $issues[$i]->customFieldValues = $customFieldValues;
 
 	$attachments = array_merge($attachments, getAttachmentIds($ticket["description"]));
 
@@ -196,6 +311,7 @@ function showHelp() {
 # assembla2jira 
   -i <path to import>         Directory to import from
   -u <path to user map>       User map file (JSON)
+  -f <path to field map>      Field map file (JSON)
   -p <path to project info>   Project info file (JSON)
   -a <attachment url prefix>  Attachment URL prefix
   -h                          This help
@@ -247,7 +363,7 @@ function getFileUrl($file) {
 	global $options;
 	//var_dump($options);
 	$cwd = getcwd();
-	return $options["a"] . str_replace($cwd, "", realpath($file));
+	return $options["a"] . str_replace($options["i"], "", realpath($file));
 }
 
 function getAttachments($attachmentIds) {

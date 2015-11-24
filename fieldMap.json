@@ -1,0 +1,32 @@
+{
+    "customFields": [
+        {
+            "sourceId": 11111,
+            "fieldName": "Bill to",
+            "fieldType": "com.atlassian.jira.plugin.system.customfieldtypes:cascadingselect"
+        },
+        {
+            "sourceId": 11112,
+            "issueField": "issueType"
+        }
+    ],
+    "status": {
+        "New": {
+            "status": "To Do",
+            "resolution": "Unresolved"
+        },
+        "Completed": {
+            "status": "Done",
+            "resolution": "Done"
+        }
+    },
+    "priority": [
+        "None",
+        "Highest",
+        "High",
+        "Medium",
+        "Low",
+        "Lowest"
+    ],
+    "customComment": "(imported from https://www.assembla.com/spaces/project-name/tickets/[ticketId])"
+}

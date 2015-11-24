@@ -7,6 +7,7 @@ assembla2jira
 
 ```
 $ assembla2jira -i <path to Assembla ticket export directory> \
+                -f <path to Assembla field to JIRA field map (JSON) \
                 -u <path to Assembla user ID to JIRA user map (JSON)> \
                 -p <path to new JIRA project definition (JSON) \
                 -a<URL "prefix" for exported attachment files> > jira-compatable.json
@@ -28,9 +29,11 @@ $ assembla2jira -i <path to Assembla ticket export directory> \
 - Set the permissions on the remote files just in case; `ssh <your server> 'chmod -R a+rX <path to where the files will hang out>'`
 - Copy [projectPrototype.json](projectPrototype.json) to a new file that you'll edit to create the JIRA project definition, it's relatively undocumented but be sure to fill in at least `name`, `key`, and `description`.  `name` is the friendly human name of hte project, `key` is the short abbreviation that's used to reference the project internally.  It's *very important* to be sure the `name` and `key` are unique for the project you're importing otherwise this may overwrite existing data.
 - Create the [userMap.json](userMap.json) which will map Assembla IDs to JIRA users, the Assembla ID will be something like "bAnUJ2ORKr4Az9acwqjQWU" while the JIRA "name" is the username and something like `bsr` and "fullname" is the full name and something like `Brent Rieck`. Unfortunately all of your Assembla user IDs will need to be filled in and finding all of them in Assembla is difficult.  If it comes down to a few IDs you can't find you can assign multiple IDs to the same JIRA user or to a JIRA user which doesn't exist. 
+- Create the [fieldMap.json](fieldMap.json) which will map various Assembla fields (and custom field) to JIRA fields. The customFields array maps Assembla fields with a sourceId to a Jira custom field (via fieldName and fieldType), or a standard Jira field (via issueField). The status array maps the Assembla status + resolution list to Jira. The priority list maps priorities from Assembla to Jira (by the numeric index, starting with 0); this one may not need to be updated. The customComment field will be appended to the end of each ticket description to provide a link back to the source; update the link path to point to the correct Assembla ticket.   
 - Run `assembla2jira`:
 ```
 $ assembla2jira -i <path to Assembla ticket export directory> \
+                -f <path to Assembla field to JIRA field map (JSON) \
                 -u userMap.json \
                 -p <path to new JIRA project definition (JSON) \
                 -a"http://substancedev:substancedev@assemblaexport.substancedev.com" > jira-compatable.json
